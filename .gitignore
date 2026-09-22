@@ -1,0 +1,21 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+.env
+# node / next
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+# flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/pubspec.lock
+# os / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

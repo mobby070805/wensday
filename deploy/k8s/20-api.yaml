@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: api, namespace: wensday, labels: { app: api } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: api } }
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  template:
+    metadata: { labels: { app: api } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: api
+          image: ghcr.io/OWNER/wensday-api:latest        # replaced by CI
+          ports: [{ containerPort: 8000 }]
+          envFrom: [{ configMapRef: { name: wensday-config } }, { secretRef: { name: wensday-secrets } }]
+          env: [{ name: WENSDAY_REMINDER_WORKER, value: "false" }]   # the worker Deployment owns background jobs
+          readinessProbe: { httpGet: { path: /readyz, port: 8000 }, periodSeconds: 5, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8000 }, initialDelaySeconds: 15, periodSeconds: 15 }
+          resources: { requests: { cpu: 100m, memory: 192Mi }, limits: { cpu: "1", memory: 512Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api, namespace: wensday }
+spec: { selector: { app: api }, ports: [{ port: 80, targetPort: 8000 }] }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: api, namespace: wensday }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
+  minReplicas: 2
+  maxReplicas: 10
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } } }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: api, namespace: wensday }
+spec: { minAvailable: 1, selector: { matchLabels: { app: api } } }

@@ -1,0 +1,19 @@
+# Background jobs (reminders, scheduled workflows). Claim-based firing makes >1 replica safe,
+# but 1 is enough; 2 gives failover without a gap.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: worker, namespace: wensday, labels: { app: worker } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: worker } }
+  template:
+    metadata: { labels: { app: worker } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: ghcr.io/OWNER/wensday-api:latest
+          command: ["python", "-m", "app.worker"]
+          envFrom: [{ configMapRef: { name: wensday-config } }, { secretRef: { name: wensday-secrets } }]
+          resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 384Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }

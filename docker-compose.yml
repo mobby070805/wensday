@@ -1,0 +1,40 @@
+# Local full stack:  docker compose up --build
+# Web http://localhost:3000 · API http://localhost:8000/docs
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: wensday, POSTGRES_PASSWORD: wensday, POSTGRES_DB: wensday }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U wensday"], interval: 5s, timeout: 3s, retries: 10 }
+  redis:
+    image: redis:7-alpine
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10 }
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    volumes: [qdrant:/qdrant/storage]
+
+  api: &api
+    build: ./backend
+    env_file: [{ path: ./backend/.env, required: false }]
+    environment: &apienv
+      WENSDAY_DATABASE_URL: postgresql+asyncpg://wensday:wensday@postgres:5432/wensday
+      WENSDAY_REDIS_URL: redis://redis:6379/0
+      WENSDAY_QDRANT_URL: http://qdrant:6333
+      WENSDAY_JWT_SECRET: ${WENSDAY_JWT_SECRET:-dev-only-change-me-dev-only-change-me}
+      WENSDAY_REMINDER_WORKER: "false"          # the worker service owns background jobs
+      WENSDAY_CORS_ORIGINS: '["http://localhost:3000"]'
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+    ports: ["8000:8000"]
+  worker:
+    <<: *api
+    ports: []
+    command: ["python", "-m", "app.worker"]
+    environment: { <<: *apienv, WENSDAY_REMINDER_WORKER: "true" }
+  web:
+    build:
+      context: ./web
+      args: { NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1 }
+    depends_on: [api]
+    ports: ["3000:3000"]
+
+volumes: { pgdata: {}, qdrant: {} }

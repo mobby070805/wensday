@@ -1,0 +1,15 @@
+# Runtime dependencies (pinned to the versions the test-suite was run against)
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+SQLAlchemy[asyncio]==2.0.54
+aiosqlite==0.22.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
+PyJWT==2.14.0
+httpx==0.28.1
+python-multipart==0.0.32
+cryptography==50.0.1
+tzdata==2026.4
+# Production extras: PostgreSQL driver, Redis (cache + realtime fan-out)
+asyncpg>=0.29
+redis>=5.0

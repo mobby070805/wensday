@@ -1,0 +1,77 @@
+# In-cluster data services for dev/staging. For production prefer managed Postgres/Redis
+# (RDS / Cloud SQL / ElastiCache / Memorystore) and Qdrant Cloud, and remove this file from kustomization.yaml.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: postgres, namespace: wensday }
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: wensday }
+            - { name: POSTGRES_DB, value: wensday }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: wensday-postgres, key: password } } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+          readinessProbe: { exec: { command: ["pg_isready", "-U", "wensday"] }, periodSeconds: 5 }
+          resources: { requests: { cpu: 100m, memory: 256Mi } }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 10Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres, namespace: wensday }
+spec: { selector: { app: postgres }, ports: [{ port: 5432 }], clusterIP: None }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: redis, namespace: wensday }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports: [{ containerPort: 6379 }]
+          resources: { requests: { cpu: 50m, memory: 64Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis, namespace: wensday }
+spec: { selector: { app: redis }, ports: [{ port: 6379 }] }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: qdrant, namespace: wensday }
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector: { matchLabels: { app: qdrant } }
+  template:
+    metadata: { labels: { app: qdrant } }
+    spec:
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.4
+          ports: [{ containerPort: 6333 }]
+          volumeMounts: [{ name: data, mountPath: /qdrant/storage }]
+          resources: { requests: { cpu: 100m, memory: 256Mi } }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 5Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: qdrant, namespace: wensday }
+spec: { selector: { app: qdrant }, ports: [{ port: 6333 }] }

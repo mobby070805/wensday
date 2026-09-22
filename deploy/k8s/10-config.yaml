@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: wensday-config, namespace: wensday }
+data:
+  WENSDAY_ENV: prod
+  WENSDAY_REDIS_URL: redis://redis:6379/0
+  WENSDAY_QDRANT_URL: http://qdrant:6333
+  WENSDAY_WEB_ORIGIN: https://wensday.example.com
+  WENSDAY_CORS_ORIGINS: '["https://wensday.example.com"]'
+  WENSDAY_GOOGLE_REDIRECT_URI: https://api.wensday.example.com/api/v1/auth/google/callback
+  WENSDAY_AUTO_CREATE_TABLES: "true"   # first deploy only; then set to "false" and manage the schema with migrations
+  WENSDAY_LLM_CHAIN: '["anthropic","openai_compat","offline"]'
+  WENSDAY_STT_PROVIDER: browser
+  WENSDAY_TTS_PROVIDER: browser
+# The Secret "wensday-secrets" is NOT stored in git. Create it with:
+#   kubectl -n wensday create secret generic wensday-secrets \
+#     --from-literal=WENSDAY_DATABASE_URL='postgresql+asyncpg://wensday:<pw>@postgres:5432/wensday' \
+#     --from-literal=WENSDAY_JWT_SECRET="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')" \
+#     --from-literal=WENSDAY_TOKEN_ENCRYPTION_KEY="$(python -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())')" \
+#     --from-literal=WENSDAY_ANTHROPIC_API_KEY=... \
+#     --from-literal=WENSDAY_GOOGLE_CLIENT_ID=... --from-literal=WENSDAY_GOOGLE_CLIENT_SECRET=...
+# and "wensday-postgres" (key: password) for the in-cluster Postgres. Or use External Secrets / Sealed Secrets.

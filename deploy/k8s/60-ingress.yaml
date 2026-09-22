@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wensday
+  namespace: wensday
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"     # long-lived websockets
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: 12m            # voice uploads are capped at 10 MB by the API
+spec:
+  ingressClassName: nginx
+  tls: [{ hosts: [wensday.example.com, api.wensday.example.com], secretName: wensday-tls }]
+  rules:
+    - host: wensday.example.com
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: web, port: { number: 80 } } } }] }
+    - host: api.wensday.example.com
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: api, port: { number: 80 } } } }] }
+---
+# the data services accept connections only from the API and worker pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: data-only-from-app, namespace: wensday }
+spec:
+  podSelector: { matchExpressions: [{ key: app, operator: In, values: [postgres, redis, qdrant] }] }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchExpressions: [{ key: app, operator: In, values: [api, worker] }] } }]

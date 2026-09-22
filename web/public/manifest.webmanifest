@@ -1,0 +1,10 @@
+{
+  "name": "Wensday",
+  "short_name": "Wensday",
+  "description": "Voice-first personal assistant for Tamil, English and Tanglish",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#070b14",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
