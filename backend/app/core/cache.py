@@ -1,8 +1,11 @@
 """Tiny cache/rate-limit abstraction: Redis when configured, in-memory otherwise."""
 from __future__ import annotations
 
+import logging
 import time
 from typing import Protocol
+
+log = logging.getLogger("wensday.cache")
 
 
 class Cache(Protocol):
@@ -40,22 +43,58 @@ class MemoryCache:
 
 
 class RedisCache:
+    """A `RedisCache` that stops being reachable mid-session (network blip, Redis restart,
+    failover) must not take the API down with it: every operation falls back to a local,
+    per-replica `MemoryCache` for the duration of the outage rather than raising. This matters
+    because `incr_window` backs the rate-limit dependency used on almost every route — an
+    unhandled exception there would 500 the whole API on any Redis hiccup.
+
+    The fallback is per-replica and resets when Redis recovers (the next successful call wins),
+    which is the right trade-off for a rate limiter: slightly looser limits during an outage
+    beat an outage of the whole product.
+    """
+
     def __init__(self, url: str) -> None:
         import redis.asyncio as aioredis
 
         self._r = aioredis.from_url(url, decode_responses=True)
+        self._fallback = MemoryCache()
+        self._healthy = True  # only used to throttle logging, not to gate behaviour
+
+    def _note(self, ok: bool, exc: Exception | None = None) -> None:
+        if ok and not self._healthy:
+            log.warning("Redis connection recovered")
+        elif not ok and self._healthy:
+            log.warning("Redis unreachable; falling back to local per-replica cache: %s", exc)
+        self._healthy = ok
 
     async def incr_window(self, key: str, window_s: int) -> int:
-        n = await self._r.incr(key)
-        if n == 1:
-            await self._r.expire(key, window_s)
-        return int(n)
+        try:
+            n = await self._r.incr(key)
+            if n == 1:
+                await self._r.expire(key, window_s)
+            self._note(True)
+            return int(n)
+        except Exception as e:  # noqa: BLE001 - any Redis failure degrades, never propagates
+            self._note(False, e)
+            return await self._fallback.incr_window(key, window_s)
 
     async def get(self, key: str) -> str | None:
-        return await self._r.get(key)
+        try:
+            v = await self._r.get(key)
+            self._note(True)
+            return v
+        except Exception as e:  # noqa: BLE001
+            self._note(False, e)
+            return await self._fallback.get(key)
 
     async def set(self, key: str, value: str, ttl_s: int | None = None) -> None:
-        await self._r.set(key, value, ex=ttl_s)
+        try:
+            await self._r.set(key, value, ex=ttl_s)
+            self._note(True)
+        except Exception as e:  # noqa: BLE001
+            self._note(False, e)
+            await self._fallback.set(key, value, ttl_s)
 
 
 def make_cache(redis_url: str | None) -> Cache:

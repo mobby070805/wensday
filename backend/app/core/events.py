@@ -15,11 +15,13 @@ log = logging.getLogger("wensday.events")
 
 
 class EventHub:
-    def __init__(self, redis_url: str | None = None):
+    def __init__(self, redis_url: str | None = None, reconnect_delay_s: float = 2.0):
         self._subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
         self._redis_url = redis_url
         self._redis = None
         self._pump: asyncio.Task | None = None
+        self._reconnect_delay_s = reconnect_delay_s
+        self._stopping = False
 
     async def start(self) -> None:
         if not self._redis_url:
@@ -28,16 +30,24 @@ class EventHub:
             import redis.asyncio as aioredis  # optional dependency
 
             self._redis = aioredis.from_url(self._redis_url)
-            self._pump = asyncio.create_task(self._listen())
+            self._pump = asyncio.create_task(self._listen_forever())
         except Exception:  # noqa: BLE001 - fall back to in-process delivery
             log.warning("redis unavailable; events stay in-process", exc_info=True)
             self._redis = None
 
     async def stop(self) -> None:
+        self._stopping = True
         if self._pump:
             self._pump.cancel()
+            try:
+                await self._pump
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutdown must not raise
+                pass
         if self._redis:
-            await self._redis.aclose()
+            try:
+                await self._redis.aclose()
+            except Exception:  # noqa: BLE001 - shutdown must succeed even if Redis is unreachable
+                log.warning("error closing redis connection during shutdown", exc_info=True)
 
     def subscribe(self, user_id: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -69,13 +79,35 @@ class EventHub:
                 log.warning("redis publish failed; delivering locally", exc_info=True)
         self._deliver_local(user_id, event)
 
-    async def _listen(self) -> None:
+    async def _listen_forever(self) -> None:
+        """Supervises `_listen_once`, reconnecting with a fixed delay whenever the pubsub
+        connection is lost (Redis restart, network blip, failover). Without this, a single
+        dropped connection would permanently stop cross-replica event delivery until the whole
+        API process was restarted — the background task would simply die, unobserved."""
+        while not self._stopping:
+            try:
+                await self._listen_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - keep retrying; this task must never just die
+                if self._stopping:
+                    return
+                log.warning("redis pubsub listener lost connection; reconnecting in %.1fs", self._reconnect_delay_s, exc_info=True)
+                await asyncio.sleep(self._reconnect_delay_s)
+
+    async def _listen_once(self) -> None:
         pubsub = self._redis.pubsub()
-        await pubsub.subscribe("wensday:events")
-        async for msg in pubsub.listen():
-            if msg.get("type") == "message":
-                try:
-                    data = json.loads(msg["data"])
-                    self._deliver_local(data["u"], data["e"])
-                except Exception:  # noqa: BLE001
-                    log.exception("bad event payload")
+        try:
+            await pubsub.subscribe("wensday:events")
+            async for msg in pubsub.listen():
+                if msg.get("type") == "message":
+                    try:
+                        data = json.loads(msg["data"])
+                        self._deliver_local(data["u"], data["e"])
+                    except Exception:  # noqa: BLE001
+                        log.exception("bad event payload")
+        finally:
+            try:
+                await pubsub.aclose()
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                pass
