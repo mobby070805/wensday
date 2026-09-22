@@ -57,7 +57,14 @@ class RedisCache:
     def __init__(self, url: str) -> None:
         import redis.asyncio as aioredis
 
-        self._r = aioredis.from_url(url, decode_responses=True)
+        # protocol=2 (RESP2) is explicit and deliberate: redis-py defaults to negotiating RESP3
+        # via a HELLO handshake on connect, which only Redis >= 6.0 understands. Anything older,
+        # or many "Redis-compatible" managed services, reject HELLO outright -- verified against
+        # a real redis-server 5.0.14.1: every single call silently fell back to the in-process
+        # cache without RESP2 pinned, because the very first connection attempt failed. RESP2 is
+        # understood by every Redis version and every compatible service; we use no RESP3-only
+        # feature (client-side caching, push messages), so there is no downside to pinning it.
+        self._r = aioredis.from_url(url, decode_responses=True, protocol=2)
         self._fallback = MemoryCache()
         self._healthy = True  # only used to throttle logging, not to gate behaviour
 

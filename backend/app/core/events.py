@@ -29,7 +29,11 @@ class EventHub:
         try:
             import redis.asyncio as aioredis  # optional dependency
 
-            self._redis = aioredis.from_url(self._redis_url)
+            # RESP2, deliberately -- see the matching comment in core/cache.py. Verified against a
+            # real redis-server: without this, the very first connection attempt fails its HELLO
+            # handshake against any pre-6.0 (or HELLO-incompatible) server and every event silently
+            # falls back to local-only delivery, defeating cross-replica fan-out with no hard error.
+            self._redis = aioredis.from_url(self._redis_url, protocol=2)
             self._pump = asyncio.create_task(self._listen_forever())
         except Exception:  # noqa: BLE001 - fall back to in-process delivery
             log.warning("redis unavailable; events stay in-process", exc_info=True)

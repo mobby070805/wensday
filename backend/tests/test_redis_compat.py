@@ -6,9 +6,14 @@ Two things are proven here that were previously only claimed:
 2. Both degrade gracefully — rather than crashing every request — when Redis becomes
    unreachable *after* the app has already connected to it (a mid-session outage).
 
-No real `redis-server` is available in this environment; fakeredis is a faithful in-process
-implementation of the RESP protocol used as a drop-in for `redis.asyncio`. This is documented
-in docs/testing.md as compile/protocol-level verification, not a live-cluster test.
+fakeredis is a faithful in-process implementation of the RESP protocol used as a drop-in for
+`redis.asyncio`, and is what runs in ordinary CI (no server to install). For genuine live-server
+proof — including a real process actually killed and restarted mid-session, which fakeredis
+cannot simulate (confirmed experimentally: disconnecting a fake connection is a no-op) — see
+`tests/test_live_redis.py`, which skips cleanly when no live server is configured and ran
+successfully against a real `redis-server` during the Real World Validation pass (see
+docs/reports/phase-live-redis.md). That run is also what caught the bug this file's
+`test_redis_client_pins_resp2_for_broad_server_compatibility` now guards against.
 """
 from __future__ import annotations
 
@@ -28,13 +33,38 @@ def _client(server: fakeredis.FakeServer):
     return fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
 
 
-def _wire(monkeypatch, server: fakeredis.FakeServer, *, flaky: "Flaky | None" = None):
+def _wire(monkeypatch, server: fakeredis.FakeServer, *, flaky: "Flaky | None" = None, calls: list | None = None):
     """Point `redis.asyncio.from_url` at fakeredis (optionally wrapped to inject failures)."""
     def from_url(url, *a, **kw):
+        if calls is not None:
+            calls.append(kw)
         c = fakeredis.aioredis.FakeRedis(server=server, decode_responses=kw.get("decode_responses", False))
         return flaky.wrap(c) if flaky else c
 
     monkeypatch.setattr("redis.asyncio.from_url", from_url)
+
+
+async def test_redis_client_pins_resp2_for_broad_server_compatibility(monkeypatch):
+    """Regression test for a real bug found against a live Redis 5.0.14.1 server during the Real
+    World Validation pass: redis-py defaults to negotiating RESP3 via a HELLO handshake, which
+    only Redis >= 6.0 understands. Without protocol=2 pinned explicitly, the very first connection
+    attempt against an older (or HELLO-incompatible) server fails, and RedisCache/EventHub both
+    silently and permanently fall back to local-only behaviour -- with no hard error, just a log
+    line -- because the resilience fix from the prior pass is *designed* to swallow exactly this
+    kind of connection failure. fakeredis accepts RESP3 fine, so this could only be caught by
+    asserting the actual call arguments, not by observing behaviour against the fake server."""
+    calls: list = []
+    _wire(monkeypatch, fakeredis.FakeServer(), calls=calls)
+    RedisCache("redis://fake/0")
+    assert calls[-1].get("protocol") == 2
+
+    calls.clear()
+    hub = EventHub(redis_url="redis://fake/0")
+    await hub.start()
+    try:
+        assert calls[-1].get("protocol") == 2
+    finally:
+        await hub.stop()
 
 
 class Flaky:
