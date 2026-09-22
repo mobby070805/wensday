@@ -10,7 +10,9 @@ export function Chat({ lang }: { lang: UiLang }) {
   const { messages, send, error, clearError } = useAssistant();
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" }), [messages]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages]);
 
   function submit(e: FormEvent) {
     e.preventDefault();

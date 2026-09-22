@@ -34,6 +34,44 @@ jobs:
       - run: npm run build
         env: { NEXT_TELEMETRY_DISABLED: "1" }
 
+  e2e:
+    # Real-browser validation: caught a real production bug in the past (an implicit-return
+    # useEffect that TypeScript's `void`-return special-casing cannot detect statically -- see
+    # docs/reports/phase-browser.md) that unit tests, typecheck and `next build` all missed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: backend/requirements-dev.txt }
+      - run: pip install -r requirements-dev.txt
+        working-directory: backend
+      - name: Start the backend
+        working-directory: backend
+        run: |
+          WENSDAY_DATABASE_URL="sqlite+aiosqlite:///$RUNNER_TEMP/e2e.db" WENSDAY_LLM_CHAIN='["offline"]' \
+            WENSDAY_JWT_SECRET="ci-e2e-secret-32-characters-minimum" WENSDAY_CORS_ORIGINS='["http://localhost:3100"]' \
+            PYTHONUTF8=1 python -m uvicorn app.main:factory --factory --port 8099 &
+          for i in $(seq 1 30); do curl -sf http://localhost:8099/healthz && break; sleep 1; done
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+        env: { NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_API_URL: "http://localhost:8099/api/v1" }
+      - name: Start the web app
+        working-directory: web
+        run: |
+          PORT=3100 npm run start &
+          for i in $(seq 1 30); do curl -sf http://localhost:3100/login && break; sleep 1; done
+      - run: npm run test:e2e
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-report, path: web/test-results/, retention-days: 7 }
+
   mobile:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: mobile } }
@@ -57,7 +95,7 @@ jobs:
         run: docker compose config -q
 
   images:
-    needs: [backend, web, mobile, manifests]
+    needs: [backend, web, e2e, mobile, manifests]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }

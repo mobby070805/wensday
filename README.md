@@ -12,15 +12,16 @@ A voice-first personal AI assistant with a calm, respectful female voice — bui
 
 | Area | Where | State |
 |---|---|---|
-| Backend (FastAPI, SQLAlchemy, JWT/OAuth) | [backend/](backend) | **Built and tested** — 339 tests |
+| Backend (FastAPI, SQLAlchemy, JWT/OAuth) | [backend/](backend) | **Built and tested** — 340 tests (350 with live Postgres+Redis reachable) |
 | Language system (detect · normalise · NLU · persona) | [backend/app/i18n](backend/app/i18n), [nlu](backend/app/nlu) | **Built and tested**; Tamil self-reviewed for grammar (no native sign-off yet) |
 | Memory engine (preferences, semantic recall, decay) | [backend/app/memory](backend/app/memory) | **Built and tested**, including real on-disk persistence across a simulated restart |
-| Database migrations (Alembic) | [backend/alembic](backend/alembic) | **Built and tested** (real CLI, SQLite + PostgreSQL DDL) — never run against a live server |
-| Voice (STT/TTS providers, per-language voices, barge-in) | [backend/app/voice](backend/app/voice) | Built; providers tested against mocks only |
-| Integrations (Google Calendar/Gmail) + plugin SDK | [backend/app/integrations](backend/app/integrations), [plugins](backend/app/plugins) | Built; tested against a mocked Google |
-| Web app (Next.js + TypeScript) | [web/](web) | Type-checks, 25 unit tests, production build passes; **not exercised in a browser** |
+| Database migrations (Alembic) | [backend/alembic](backend/alembic) | **Built and tested against a real, live PostgreSQL 16.4 server** — upgrade/downgrade round trip confirmed via psql |
+| Redis (rate limiting, cross-replica sync) | [backend/app/core](backend/app/core) | **Built and tested against a real, live `redis-server`** — including a genuine kill-and-restart. Found and fixed a real bug (RESP3/HELLO incompatibility). |
+| Voice (STT/TTS providers, per-language voices, barge-in) | [backend/app/voice](backend/app/voice) | Built; providers tested against mocks only — no real audio/mic in any automatable environment |
+| Integrations (Google Calendar/Gmail) + plugin SDK | [backend/app/integrations](backend/app/integrations), [plugins](backend/app/plugins) | Built; tested against a mocked Google — real validation needs a Google Cloud OAuth client + human consent |
+| Web app (Next.js + TypeScript) | [web/](web) | Type-checks, 25 unit tests, production build passes, **and 5 real-Chromium Playwright E2E tests against the real production build**. Found and fixed a real crash-on-chat-send bug. Voice remains untested (no mic). |
 | Mobile app (Flutter) | [mobile/](mobile) | Written to spec; **never compiled or run** (no Flutter SDK available) |
-| Docker / Kubernetes / CI | [docker-compose.yml](docker-compose.yml), [deploy/k8s](deploy/k8s), [.github/workflows](.github/workflows) | YAML validated, incl. a migration Job; **never built or applied** (no Docker/cluster available) |
+| Docker / Kubernetes / CI | [docker-compose.yml](docker-compose.yml), [deploy/k8s](deploy/k8s), [.github/workflows](.github/workflows) | YAML validated, incl. migration + E2E CI jobs; **never built or applied against a live cluster** (no Docker/cluster available) |
 
 The honest per-phase picture, including every known gap, is in [ROADMAP.md](ROADMAP.md) and [docs/reports/](docs/reports).
 
