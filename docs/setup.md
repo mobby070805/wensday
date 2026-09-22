@@ -21,6 +21,20 @@ python -m pytest -q                                    # 312 tests
 ```
 Minimum `.env` for local work: nothing (defaults are fine). For anything shared, set `WENSDAY_JWT_SECRET` to a long random string.
 
+### Database migrations (Alembic)
+
+SQLite dev/test databases are still created automatically (`WENSDAY_AUTO_CREATE_TABLES=true`, the default). Anywhere the schema needs to be reproducible — PostgreSQL, staging, production — use Alembic instead:
+
+```bash
+cd backend
+python -m alembic upgrade head                        # apply every pending migration
+python -m alembic current                              # what revision is this database at?
+python -m alembic revision --autogenerate -m "add X"   # after changing app/models.py
+python -m alembic upgrade head --sql                    # preview the SQL without connecting (any dialect, e.g. postgresql://...)
+```
+
+The database URL comes from `WENSDAY_DATABASE_URL` (or `.env`) automatically — there's nothing to edit in `alembic.ini`. If a database already has an `alembic_version` table, the app's own `create_all` refuses to run against it even if `AUTO_CREATE_TABLES` is left on, so the two mechanisms can't collide. `tests/test_migrations.py` runs `alembic upgrade head`, `downgrade base`, and `check` (drift detection) for real on every CI run.
+
 ### Configuration reference (all `WENSDAY_*`)
 | Variable | Default | Meaning |
 |---|---|---|

@@ -8,7 +8,10 @@ data:
   WENSDAY_WEB_ORIGIN: https://wensday.example.com
   WENSDAY_CORS_ORIGINS: '["https://wensday.example.com"]'
   WENSDAY_GOOGLE_REDIRECT_URI: https://api.wensday.example.com/api/v1/auth/google/callback
-  WENSDAY_AUTO_CREATE_TABLES: "true"   # first deploy only; then set to "false" and manage the schema with migrations
+  # Schema is managed by Alembic (see 25-migrate-job.yaml), which runs before this Deployment
+  # rolls out. Leave this false; the app also detects a migration-managed database itself
+  # (an alembic_version table present) and skips create_all even if this were left on.
+  WENSDAY_AUTO_CREATE_TABLES: "false"
   WENSDAY_LLM_CHAIN: '["anthropic","openai_compat","offline"]'
   WENSDAY_STT_PROVIDER: browser
   WENSDAY_TTS_PROVIDER: browser

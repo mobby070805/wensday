@@ -10,6 +10,8 @@ httpx==0.28.1
 python-multipart==0.0.32
 cryptography==50.0.1
 tzdata==2026.4
-# Production extras: PostgreSQL driver, Redis (cache + realtime fan-out)
-asyncpg>=0.29
-redis>=5.0
+# Production extras: PostgreSQL driver, Redis (cache + realtime fan-out), schema migrations
+# (Qdrant is spoken over raw REST via httpx — see app/memory/vectorstore.py — no client library needed)
+asyncpg==0.31.0
+redis==8.1.0
+alembic==1.20.0

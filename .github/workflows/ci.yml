@@ -95,10 +95,21 @@ jobs:
       - name: Configure cluster access
         run: |
           mkdir -p ~/.kube && echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
-      - name: Roll out
+      - name: Migrate database
         run: |
           OWNER=$(echo '${{ github.repository_owner }}' | tr A-Z a-z)
           kubectl apply -k deploy/k8s
+          # Jobs are immutable once created, so pin the image by substitution and recreate rather
+          # than `kubectl set image` (which wouldn't reach a Job whose pod already started).
+          sed "s#ghcr.io/OWNER/wensday-api:latest#ghcr.io/$OWNER/wensday-api:${{ github.sha }}#" \
+            deploy/k8s/25-migrate-job.yaml > /tmp/migrate-job.yaml
+          kubectl -n wensday delete job db-migrate --ignore-not-found
+          kubectl -n wensday apply -f /tmp/migrate-job.yaml
+          kubectl -n wensday wait --for=condition=complete job/db-migrate --timeout=180s || {
+            echo "::error::migration job failed"; kubectl -n wensday logs job/db-migrate --tail=200; exit 1; }
+      - name: Roll out
+        run: |
+          OWNER=$(echo '${{ github.repository_owner }}' | tr A-Z a-z)
           kubectl -n wensday set image deploy/api   api=ghcr.io/$OWNER/wensday-api:${{ github.sha }}
           kubectl -n wensday set image deploy/worker worker=ghcr.io/$OWNER/wensday-api:${{ github.sha }}
           kubectl -n wensday set image deploy/web   web=ghcr.io/$OWNER/wensday-web:${{ github.sha }}

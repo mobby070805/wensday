@@ -1,0 +1,26 @@
+# Runs the database schema up to date before the api/worker Deployments roll out to the new
+# image. Re-apply and re-run for every release that might change app/models.py:
+#
+#   kubectl -n wensday delete job db-migrate --ignore-not-found
+#   kubectl -n wensday apply -f deploy/k8s/25-migrate-job.yaml
+#   kubectl -n wensday wait --for=condition=complete job/db-migrate --timeout=120s
+#
+# (CI's `deploy` job does this automatically — see .github/workflows/ci.yml.) Safe to re-run:
+# `alembic upgrade head` is a no-op when the database is already current.
+apiVersion: batch/v1
+kind: Job
+metadata: { name: db-migrate, namespace: wensday }
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: migrate
+          image: ghcr.io/OWNER/wensday-api:latest        # replaced by CI, same image as api/worker
+          command: ["python", "-m", "alembic", "upgrade", "head"]
+          envFrom: [{ configMapRef: { name: wensday-config } }, { secretRef: { name: wensday-secrets } }]
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }

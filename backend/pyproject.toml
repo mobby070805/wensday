@@ -18,8 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-prod = ["asyncpg>=0.29", "redis>=5.0", "qdrant-client>=1.9"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-timeout>=2.3", "anyio"]
+# Qdrant is spoken over raw REST via httpx (see app/memory/vectorstore.py) — no client library needed.
+prod = ["asyncpg>=0.29", "redis>=5.0", "alembic>=1.13"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-timeout>=2.3", "anyio", "fakeredis>=2.30"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
