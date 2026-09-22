@@ -33,6 +33,7 @@ log = logging.getLogger("wensday.voice")
 router = APIRouter(tags=["voice"])
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
+MAX_TEXT_BYTES = 32 * 1024  # generous headroom over a 4000-char chat message in worst-case 3-byte-per-char Tamil UTF-8
 CHUNK = 16 * 1024
 
 
@@ -98,6 +99,11 @@ async def _stream_audio(ws: WebSocket, tts, segments: list[SpeechSegment]) -> No
 @router.websocket("/ws")
 async def realtime(ws: WebSocket, token: str = ""):
     st = ws.app.state
+    ip = ws.client.host if ws.client else "unknown"
+    attempts = await st.cache.incr_window(f"ws-connect:{ip}", 60)
+    if attempts > st.settings.ws_connect_limit_per_minute:
+        await ws.close(code=4429)  # mirrors HTTP 429; caps connection-flood / token-brute-force cheaply
+        return
     async with st.db.session() as s:
         try:
             uid = (await user_from_token(s, st.settings, token)).id
@@ -138,8 +144,12 @@ async def realtime(ws: WebSocket, token: str = ""):
                     audio_buf.clear()
                     await ws.send_json({"type": "error", "message": "audio too large"})
                 continue
+            raw_text = msg.get("text") or "{}"
+            if len(raw_text.encode("utf-8", "ignore")) > MAX_TEXT_BYTES:
+                await ws.send_json({"type": "error", "message": "message too large"})
+                continue
             try:
-                data = json.loads(msg.get("text") or "{}")
+                data = json.loads(raw_text)
             except ValueError:
                 await ws.send_json({"type": "error", "message": "invalid JSON"})
                 continue

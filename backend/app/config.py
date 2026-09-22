@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     plugin_dir: str | None = None
     auto_create_tables: bool = True  # dev/test convenience; in prod run migrations instead
     rate_limit_per_minute: int = 120
+    ws_connect_limit_per_minute: int = 30  # per-IP; a websocket connection is heavier than a REST call
 
 
 @lru_cache

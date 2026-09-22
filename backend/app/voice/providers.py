@@ -7,6 +7,7 @@ providers (Whisper-compatible, Azure) handle clients that can't, or want better 
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -15,6 +16,8 @@ import httpx
 from app.config import Settings
 from app.schemas import SpeechSegment
 from .splitter import to_ssml
+
+log = logging.getLogger("wensday.voice.providers")
 
 
 class VoiceUnavailable(Exception):
@@ -124,14 +127,20 @@ class AzureTTS:
 
 
 def build_stt(settings: Settings, client: httpx.AsyncClient) -> STTProvider:
-    if settings.stt_provider == "whisper" and settings.whisper_base_url:
-        return WhisperSTT(client, settings.whisper_base_url, settings.openai_api_key)
-    if settings.stt_provider == "azure" and settings.azure_speech_key and settings.azure_speech_region:
-        return AzureSTT(client, settings.azure_speech_key, settings.azure_speech_region)
+    if settings.stt_provider == "whisper":
+        if settings.whisper_base_url:
+            return WhisperSTT(client, settings.whisper_base_url, settings.openai_api_key)
+        log.warning("WENSDAY_STT_PROVIDER=whisper but WENSDAY_WHISPER_BASE_URL is unset; falling back to browser STT")
+    elif settings.stt_provider == "azure":
+        if settings.azure_speech_key and settings.azure_speech_region:
+            return AzureSTT(client, settings.azure_speech_key, settings.azure_speech_region)
+        log.warning("WENSDAY_STT_PROVIDER=azure but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION is incomplete; falling back to browser STT")
     return BrowserSTT()
 
 
 def build_tts(settings: Settings, client: httpx.AsyncClient) -> TTSProvider:
-    if settings.tts_provider == "azure" and settings.azure_speech_key and settings.azure_speech_region:
-        return AzureTTS(client, settings.azure_speech_key, settings.azure_speech_region)
+    if settings.tts_provider == "azure":
+        if settings.azure_speech_key and settings.azure_speech_region:
+            return AzureTTS(client, settings.azure_speech_key, settings.azure_speech_region)
+        log.warning("WENSDAY_TTS_PROVIDER=azure but AZURE_SPEECH_KEY/AZURE_SPEECH_REGION is incomplete; falling back to browser TTS")
     return BrowserTTS()

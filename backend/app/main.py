@@ -117,6 +117,15 @@ def create_app(settings: Settings | None = None, *, llm: LLMRouter | None = None
         metrics["n"] += 1
         response.headers["x-request-id"] = rid
         response.headers["x-content-type-options"] = "nosniff"
+        response.headers["x-frame-options"] = "DENY"
+        response.headers["referrer-policy"] = "no-referrer"
+        if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+            # only ever sent over TLS: HSTS on a plain-HTTP response is meaningless and, if this
+            # API were ever briefly served over HTTP by mistake, would be actively harmful
+            response.headers["strict-transport-security"] = "max-age=31536000; includeSubDomains"
+        # method + path + status only — never the query string (e.g. /memories/search?q=...) or
+        # body, both of which can carry the user's own message text.
+        log.info("%s %s -> %d %.1fms rid=%s", request.method, request.url.path, response.status_code, dt * 1000, rid)
         return response
 
     @app.get("/healthz", tags=["ops"])

@@ -21,6 +21,20 @@ def test_request_id_header_is_set_and_echoed(client):
     assert client.get("/healthz", headers={"x-request-id": "abc123"}).headers["x-request-id"] == "abc123"
 
 
+def test_security_headers_are_present_on_every_response(client):
+    h = client.get("/healthz").headers
+    assert h["x-content-type-options"] == "nosniff"
+    assert h["x-frame-options"] == "DENY"
+    assert h["referrer-policy"] == "no-referrer"
+    assert "strict-transport-security" not in h  # never sent over plain HTTP (the TestClient is http://)
+
+
+def test_hsts_is_sent_only_when_the_request_arrived_over_tls(client):
+    forwarded_https = client.get("/healthz", headers={"x-forwarded-proto": "https"})
+    assert "max-age=" in forwarded_https.headers["strict-transport-security"]
+    assert "strict-transport-security" not in client.get("/healthz").headers
+
+
 # ------------------------------------------------------------------ auth
 def test_register_login_me(client):
     p = Person(client, "Madesh@Example.com", "Madesh")

@@ -6,7 +6,8 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.voice.providers import AzureSTT, AzureTTS, STTResult, VoiceUnavailable, WhisperSTT, BrowserSTT, BrowserTTS
+from app.voice.providers import (AzureSTT, AzureTTS, STTResult, VoiceUnavailable, WhisperSTT, BrowserSTT, BrowserTTS,
+                                 build_stt, build_tts)
 from app.voice.splitter import split_speech, to_ssml
 from app.voice.translit import transliterate, transliterate_word
 from .conftest import API, Person, running
@@ -120,6 +121,34 @@ async def test_azure_stt_ignores_a_failed_locale_but_raises_when_all_fail():
     assert (await AzureSTT(_client(one_bad), "k", "r").transcribe(b"a", "audio/wav")).text == "ok"
     with pytest.raises(httpx.HTTPStatusError):
         await AzureSTT(_client(lambda r: httpx.Response(500)), "k", "r").transcribe(b"a", "audio/wav")
+
+
+def test_build_stt_picks_the_configured_provider(caplog):
+    http = httpx.AsyncClient()
+    assert isinstance(build_stt(Settings(jwt_secret="x" * 40, stt_provider="whisper", whisper_base_url="http://w/v1"), http), WhisperSTT)
+    assert isinstance(build_stt(Settings(jwt_secret="x" * 40, stt_provider="azure", azure_speech_key="k", azure_speech_region="r"), http), AzureSTT)
+    assert isinstance(build_stt(Settings(jwt_secret="x" * 40, stt_provider="browser"), http), BrowserSTT)
+    assert isinstance(build_tts(Settings(jwt_secret="x" * 40, tts_provider="azure", azure_speech_key="k", azure_speech_region="r"), http), AzureTTS)
+
+
+def test_incomplete_provider_config_falls_back_but_logs_a_warning_instead_of_failing_silently(caplog):
+    """Before this test: setting WENSDAY_STT_PROVIDER=azure with a missing key/region silently
+    became browser STT with zero explanation anywhere — an operator would have no way to tell
+    "intentionally browser" from "meant to be Azure but misconfigured" short of reading the code."""
+    http = httpx.AsyncClient()
+    with caplog.at_level("WARNING", logger="wensday.voice.providers"):
+        assert isinstance(build_stt(Settings(jwt_secret="x" * 40, stt_provider="azure", azure_speech_key="k"), http), BrowserSTT)
+    assert any("azure" in r.message.lower() and "falling back" in r.message.lower() for r in caplog.records)
+    caplog.clear()
+
+    with caplog.at_level("WARNING", logger="wensday.voice.providers"):
+        assert isinstance(build_stt(Settings(jwt_secret="x" * 40, stt_provider="whisper"), http), BrowserSTT)
+    assert any("whisper" in r.message.lower() for r in caplog.records)
+    caplog.clear()
+
+    with caplog.at_level("WARNING", logger="wensday.voice.providers"):
+        assert isinstance(build_tts(Settings(jwt_secret="x" * 40, tts_provider="azure", azure_speech_region="r"), http), BrowserTTS)
+    assert any("falling back" in r.message.lower() for r in caplog.records)
 
 
 async def test_azure_tts_posts_ssml_with_the_right_headers():
@@ -244,3 +273,37 @@ def test_socket_with_browser_stt_tells_the_client_to_send_text(client, madesh):
         ws.send_json({"type": "audio_end"})
         err = ws.receive_json()
         assert err["type"] == "error" and "client" in err["message"]
+
+
+# ------------------------------------------------------------------ socket hardening
+def test_socket_rejects_an_oversized_text_frame_without_crashing(client, madesh):
+    """An unbounded text frame let a client force the server to json.loads() an arbitrarily
+    large string on every message — no cap existed before this test. The connection must survive
+    and keep answering normal messages afterwards."""
+    with client.websocket_connect(f"{API}/ws?token={madesh.tokens['access_token']}") as ws:
+        ws.receive_json()
+        huge = "x" * (200 * 1024)  # far past any legitimate 4000-char chat message, even in Tamil UTF-8
+        ws.send_json({"type": "text", "text": huge})
+        err = ws.receive_json()
+        assert err["type"] == "error" and "large" in err["message"].lower()
+        # the connection is still healthy and did NOT try to run the oversized text as a turn
+        ws.send_json({"type": "text", "text": "hello", "speak": False})
+        assert ws.receive_json()["type"] == "reply"
+
+
+def test_socket_connection_flood_from_one_ip_is_rate_limited():
+    """Before this test: nothing stopped a single client from opening unlimited websocket
+    connections per second (each one does a DB lookup to validate the token) — a cheap DoS /
+    auth-brute-force vector with no cap anywhere on the /ws route."""
+    with running(ws_connect_limit_per_minute=3) as c:
+        p = Person(c, "a@x.com", "Madesh")
+        url = f"{API}/ws?token={p.tokens['access_token']}"
+        for _ in range(3):
+            with c.websocket_connect(url) as ws:
+                assert ws.receive_json() == {"type": "ready"}
+        from starlette.websockets import WebSocketDisconnect
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with c.websocket_connect(url) as ws:
+                ws.receive_json()
+        assert exc_info.value.code == 4429

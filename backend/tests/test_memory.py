@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from app.core.timeutil import utcnow
 from app.db import Database
@@ -12,7 +13,7 @@ from app.memory.engine import MemoryEngine
 from app.memory.facts import extract_facts
 from app.memory.knowledge import Knowledge, chunk_text, extractive_summary
 from app.memory.vectorstore import InMemoryVectorStore, QdrantStore
-from app.models import Memory, User
+from app.models import Conversation, Memory, Message, Preference, Reminder, Task, User
 
 
 @pytest.fixture
@@ -232,3 +233,80 @@ async def test_knowledge_search_spans_documents_notes_and_memories(env):
         assert await k.search(s, u2.id, "rent lease landlord") == []           # other users see nothing
         ans = await k.answer(s, u1.id, "monthly rent")
         assert "25000" in ans["answer"] and ans["citations"][0]["source"] == "document"
+
+
+# ------------------------------------------------------------------ real on-disk persistence
+# Every other test in this file uses sqlite+aiosqlite:///:memory:, which lives entirely in RAM
+# and only proves "works while the connection is open" — it cannot prove data survives a
+# reconnect. These tests use a real file on disk and a brand-new Database instance (a distinct
+# engine/connection pool) to stand in for a process restart, which is what "verify memory
+# persistence" actually has to mean for a personal assistant a user expects to remember things.
+async def test_everything_wensday_remembers_survives_closing_and_reopening_the_database(tmp_path):
+    db_file = tmp_path / "wensday.db"
+    db1 = Database(f"sqlite+aiosqlite:///{db_file.as_posix()}")
+    await db1.create_all()
+
+    eng1 = MemoryEngine(HashingEmbedder(256), InMemoryVectorStore())
+    async with db1.session() as s:
+        user = User(email="madesh@example.com", name="Madesh", timezone="Asia/Kolkata")
+        s.add(user)
+        await s.flush()
+        await eng1.set_preference(s, user.id, "language", "tanglish")
+        await eng1.remember(s, user.id, "The user's landlord is Mr Rao.", kind="fact", importance=0.9)
+        task = Task(user_id=user.id, title="Buy milk", priority=3)
+        reminder = Reminder(user_id=user.id, title="Call client", due_at=utcnow() + timedelta(days=1))
+        conv = Conversation(user_id=user.id, title="hello")
+        s.add_all([task, reminder, conv])
+        await s.flush()
+        s.add(Message(user_id=user.id, conversation_id=conv.id, role="user", text="Wensday, nalaiku 9 mani meeting remind pannu."))
+        await s.commit()
+        user_id, task_id, reminder_id, conv_id = user.id, task.id, reminder.id, conv.id
+
+    # simulate a process restart: dispose the first engine entirely, connect fresh from disk
+    await db1.dispose()
+    db2 = Database(f"sqlite+aiosqlite:///{db_file.as_posix()}")
+
+    async with db2.session() as s:
+        reloaded_user = await s.get(User, user_id)
+        assert reloaded_user is not None and reloaded_user.email == "madesh@example.com" and reloaded_user.name == "Madesh"
+
+        pref = (await s.execute(select(Preference).where(Preference.user_id == user_id, Preference.key == "language"))).scalars().one()
+        assert pref.value == "tanglish"
+
+        reloaded_task = await s.get(Task, task_id)
+        assert reloaded_task.title == "Buy milk" and reloaded_task.priority == 3 and reloaded_task.status == "open"
+
+        reloaded_reminder = await s.get(Reminder, reminder_id)
+        assert reloaded_reminder.title == "Call client" and reloaded_reminder.status == "pending"
+
+        messages = (await s.execute(select(Message).where(Message.conversation_id == conv_id))).scalars().all()
+        assert len(messages) == 1 and "nalaiku 9 mani" in messages[0].text
+
+        # the semantic index (InMemoryVectorStore) is explicitly NOT persistent on its own — this
+        # proves the documented recovery path actually works: a fresh engine lazily rehydrates it
+        # from the Memory rows' stored embeddings, which ARE durable, on first recall.
+        eng2 = MemoryEngine(HashingEmbedder(256), InMemoryVectorStore())
+        recalled = await eng2.recall(s, user_id, "landlord")
+        assert recalled and recalled[0].memory.text == "The user's landlord is Mr Rao."
+
+    await db2.dispose()
+
+
+async def test_a_fact_learned_in_one_connection_is_visible_from_a_completely_separate_one(tmp_path):
+    """Two independent Database instances against the same file stand in for two API replica
+    pods talking to one shared production database."""
+    db_file = tmp_path / "shared.db"
+    writer = Database(f"sqlite+aiosqlite:///{db_file.as_posix()}")
+    await writer.create_all()
+    async with writer.session() as s:
+        u = User(email="a@x.com")
+        s.add(u)
+        await s.commit()
+        user_id = u.id
+
+    reader = Database(f"sqlite+aiosqlite:///{db_file.as_posix()}")
+    async with reader.session() as s:
+        assert (await s.get(User, user_id)) is not None
+
+    await writer.dispose()
+    await reader.dispose()
